@@ -1,0 +1,61 @@
+name: build and test
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
+      - name: Install dependencies
+        run: go get .
+      - name: Build windows/x86
+        run: env GOOS=windows GOARCH=amd64 go build -o logmerge.exe -v ./...
+      - name: Build linux/x86
+        run: env GOOS=linux GOARCH=amd64 go build -o logmerge -v ./...
+      - name: Test with Go
+        run: go test
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: logmerge
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: logmerge.exe
+
+  release:
+    needs: [ build ]
+    name: Release
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: write
+    steps:
+      - name: Download Dist Files
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Display structure of downloaded files
+        run: ls -R dist/
+      - name: set version and push tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create a GitHub release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }}
+          artifacts: dist/linux/logmerge, dist/windows/logmerge.exe
