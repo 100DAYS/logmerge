@@ -35,7 +35,7 @@ jobs:
   release:
     needs: [ build ]
     name: Release
-    if: ${{ github.ref == 'refs/heads/master' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       packages: write
