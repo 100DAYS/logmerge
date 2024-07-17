@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,13 +78,40 @@ func getFilenamePrefix(filename string) string {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <file1> <file2> ... <fileN>")
-		return
+	// Define command-line flags for start and end times
+	startTimeStr := flag.String("start", "", "Start time (format: 2006-01-02T15:04:05)")
+	endTimeStr := flag.String("end", "", "End time (format: 2006-01-02T15:04:05)")
+	verbose := flag.Bool("v", false, "Verbose output")
+	flag.Parse()
+
+	// Parse the start and end times
+	var startTime, endTime time.Time
+	var err error
+	if *startTimeStr != "" {
+		startTime, err = time.Parse("2006-01-02T15:04:05", *startTimeStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing start time: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if *endTimeStr != "" {
+		endTime, err = time.Parse("2006-01-02T15:04:05", *endTimeStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing end time: %v\n", err)
+			os.Exit(1)
+		}
+		endTime = endTime.Add(1 * time.Second)
 	}
 
-	var files []string
-	for _, arg := range os.Args[1:] {
+	// Get the remaining arguments (file patterns)
+	files := flag.Args()
+	if len(files) == 0 {
+		fmt.Println("Usage: go run main.go [-start START_TIME] [-end END_TIME] <file1> <file2> ... <fileN>")
+		os.Exit(1)
+	}
+
+	var allFiles []string
+	for _, arg := range files {
 		matches, err := filepath.Glob(arg)
 		if err != nil {
 			fmt.Printf("Error expanding glob pattern %s: %s\n", arg, err)
@@ -93,14 +121,20 @@ func main() {
 			fmt.Printf("No files match the pattern: %s\n", arg)
 			continue
 		}
-		files = append(files, matches...)
+		allFiles = append(allFiles, matches...)
 	}
 
-	scanners := make([]*bufio.Scanner, len(files))
-	filenames := make([]string, len(files))
+	if *verbose {
+		fmt.Printf("Start time: %s\n", startTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("End time: %s\n", endTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Files: %s\n", strings.Join(allFiles, "\n   "))
+	}
+
+	scanners := make([]*bufio.Scanner, len(allFiles))
+	filenames := make([]string, len(allFiles))
 
 	// Open all files and create scanners
-	for i, file := range files {
+	for i, file := range allFiles {
 		f, err := os.Open(file)
 		if err != nil {
 			fmt.Printf("Error opening file %s: %s\n", file, err)
@@ -111,13 +145,15 @@ func main() {
 		filenames[i] = filepath.Base(file)
 	}
 
-	timestamps := make([]time.Time, len(files))
-	restOfLines := make([]string, len(files))
-	errors := make([]error, len(files))
+	timestamps := make([]time.Time, len(allFiles))
+	restOfLines := make([]string, len(allFiles))
+	errors := make([]error, len(allFiles))
 
 	// Read the first timestamp from each file
 	for i := range scanners {
-		timestamps[i], restOfLines[i], errors[i] = readNextTimestamp(scanners[i])
+		if scanners[i] != nil {
+			timestamps[i], restOfLines[i], errors[i] = readNextTimestamp(scanners[i])
+		}
 	}
 
 	for {
@@ -139,9 +175,14 @@ func main() {
 			break
 		}
 
-		// Print the earliest timestamp with the filename prefix and the rest of the line
-		filenamePrefix := getFilenamePrefix(filenames[earliestIndex])
-		fmt.Printf("%s: %s: %s\n", filenamePrefix, earliestTime.Format("2006-01-02 15:04:05"), restOfLines[earliestIndex])
+		if (startTime.IsZero() || !earliestTime.Before(startTime)) && (endTime.IsZero() || !earliestTime.After(endTime)) {
+			// Print the earliest timestamp with the filename prefix and the rest of the line
+			filenamePrefix := getFilenamePrefix(filenames[earliestIndex])
+			fmt.Printf("%s: %s: %s\n", earliestTime.Format("2006-01-02 15:04:05"), filenamePrefix, restOfLines[earliestIndex])
+		}
+		if !endTime.IsZero() && earliestTime.After(endTime) {
+			break
+		}
 
 		// Read the next timestamp from the file that had the earliest timestamp
 		timestamps[earliestIndex], restOfLines[earliestIndex], errors[earliestIndex] = readNextTimestamp(scanners[earliestIndex])

@@ -1,3 +1,3 @@
 module github.com/100days/logmerge
 
-go 1.22.5
+go 1.22
