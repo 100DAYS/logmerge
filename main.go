@@ -15,6 +15,7 @@ var timestampPatterns = []struct {
 	regex  string
 	layout string
 }{
+	{`([A-Za-z]{3} +\d+ \d{2}:\d{2}:\d{2})`, "Jan _2 15:04:05"},
 	{`\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\]`, "2006-01-02 15:04:05 -0700"}, // New format
 	{`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})`, "2006-01-02 15:04:05.000"},
 	{`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})`, "2006-01-02 15:04:05.000"},
@@ -22,7 +23,6 @@ var timestampPatterns = []struct {
 	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3})`, "2006-01-02T15:04:05.000"},
 	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})`, "2006-01-02T15:04:05.000"},
 	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`, "2006-01-02T15:04:05"},
-	{`([A-Za-z]{3} \d{2} \d{2}:\d{2}:\d{2})`, "Jan 02 15:04:05"},
 	{`(\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2})`, "02/Jan/2006 15:04:05"},
 	{`(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})`, "02/Jan/2006:15:04:05 -0700"},
 	{`(\d{2}:\d{2}:\d{2}\.\d{6})`, "15:04:05.000000"},
@@ -37,13 +37,12 @@ func parseLogLine(line string) (time.Time, string, error) {
 		if match != nil {
 			layout := pattern.layout
 			timestampStr := match[1]
-			if layout == "Jan 02 15:04:05" {
-				timestampStr = fmt.Sprintf("%d %s", currentYear, timestampStr)
-				layout = "2006 Jan 02 15:04:05"
-			}
 			timestamp, err := time.Parse(layout, timestampStr)
 			if err != nil {
 				return time.Time{}, "", err
+			}
+			if timestamp.Year() == 0 {
+				timestamp = timestamp.AddDate(currentYear, 0, 0)
 			}
 
 			// Find the index where the timestamp starts and ends
