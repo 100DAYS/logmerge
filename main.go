@@ -14,59 +14,93 @@ import (
 )
 
 var timestampPatterns = []struct {
-	regex  string
+	regex  *regexp.Regexp
 	layout string
 }{
-	{`([A-Za-z]{3} +\d+ \d{2}:\d{2}:\d{2})`, "Jan _2 15:04:05"},
-	{`\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\]`, "2006-01-02 15:04:05 -0700"}, // New format
-	{`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})`, "2006-01-02 15:04:05.000"},
-	{`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})`, "2006-01-02 15:04:05.000"},
-	{`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`, "2006-01-02 15:04:05"},
-	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3})`, "2006-01-02T15:04:05.000"},
-	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})`, "2006-01-02T15:04:05.000"},
-	{`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`, "2006-01-02T15:04:05"},
-	{`(\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2})`, "02/Jan/2006 15:04:05"},
-	{`(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})`, "02/Jan/2006:15:04:05 -0700"},
-	{`(\d{2}:\d{2}:\d{2}\.\d{6})`, "15:04:05.000000"},
-	{`(\d+) (\d{2}:\d{2}:\d{2}\.\d{6})`, "15:04:05.000000"}, // strace format
+	{regexp.MustCompile(`([A-Za-z]{3} +\d+ \d{2}:\d{2}:\d{2})`), "Jan _2 15:04:05"},
+	{regexp.MustCompile(`\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\]`), "2006-01-02 15:04:05 -0700"}, // New format
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})`), "2006-01-02 15:04:05.000"},
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})`), "2006-01-02 15:04:05.000"},
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`), "2006-01-02 15:04:05"},
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3})`), "2006-01-02T15:04:05.000"},
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})`), "2006-01-02T15:04:05.000"},
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`), "2006-01-02T15:04:05"},
+	{regexp.MustCompile(`(\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2})`), "02/Jan/2006 15:04:05"},
+	{regexp.MustCompile(`(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})`), "02/Jan/2006:15:04:05 -0700"},
+	{regexp.MustCompile(`(\d{2}:\d{2}:\d{2}\.\d{6})`), "15:04:05.000000"},
+	{regexp.MustCompile(`(\d+) (\d{2}:\d{2}:\d{2}\.\d{6})`), "15:04:05.000000"}, // strace format
 }
 
 var NoTimestampError = errors.New("no Timestamp in Line")
 var EndOfFileError = errors.New("end of file")
 var logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-func parseLogLine(line string) (time.Time, string, error) {
-	currentYear := time.Now().Year()
-	for _, pattern := range timestampPatterns {
-		re := regexp.MustCompile(pattern.regex)
-		match := re.FindStringSubmatch(line)
-		if match != nil {
-			layout := pattern.layout
-			timestampStr := match[1]
-			timestamp, err := time.Parse(layout, timestampStr)
-			if err != nil {
-				return time.Time{}, "", err
-			}
-			if timestamp.Year() == 0 {
-				timestamp = timestamp.AddDate(currentYear, 0, 0)
-			}
-
-			// Find the index where the timestamp starts and ends
-			startIndex := strings.Index(line, match[0])
-			endIndex := startIndex + len(match[0])
-
-			// Combine the parts before and after the timestamp
-			restOfLine := line[:startIndex] + line[endIndex:]
-
-			return timestamp, restOfLine, nil
+func findBestMatch(line string) (index int, resLoc []int, err error) {
+	err = NoTimestampError
+	for i, pattern := range timestampPatterns {
+		loc := pattern.regex.FindStringIndex(line)
+		if loc == nil {
+			continue
 		}
+		if resLoc == nil || loc[0] < resLoc[0] || (loc[1]-loc[0] > resLoc[1]-resLoc[0]) {
+			resLoc = loc
+			index = i
+			err = nil
+		}
+	}
+	return
+}
+
+var logFormatIndexes = map[int]int{}
+var currentYear int = time.Now().Year()
+var processedLines int
+var cacheHits int
+
+func extractTimestamp(line string, loc []int, layout string) (timestamp time.Time, remaining string, err error) {
+	timestamp, err = time.Parse(layout, line[loc[0]:loc[1]])
+	if err != nil {
+		return time.Time{}, line, NoTimestampError
+	}
+	if timestamp.Year() == 0 {
+		timestamp = timestamp.AddDate(currentYear, 0, 0)
+	}
+	return timestamp, line[:loc[0]] + line[loc[1]:], nil
+}
+
+func parseLogLine(line string, fileIndex int) (time.Time, string, error) {
+	var loc []int
+	var patternIndex int
+	var err error
+
+	processedLines++
+
+	if idx, ok := logFormatIndexes[fileIndex]; ok {
+		pattern := timestampPatterns[idx]
+		loc = pattern.regex.FindStringIndex(line)
+		if loc != nil {
+			timestamp, remaining, err := extractTimestamp(line, loc, pattern.layout)
+			if err == nil {
+				cacheHits++
+			}
+			return timestamp, remaining, err
+		}
+
+	}
+
+	patternIndex, loc, err = findBestMatch(line)
+	if err == nil {
+		timestamp, remaining, err := extractTimestamp(line, loc, timestampPatterns[patternIndex].layout)
+		if err == nil {
+			logFormatIndexes[fileIndex] = patternIndex
+		}
+		return timestamp, remaining, nil
 	}
 	return time.Time{}, line, NoTimestampError
 }
 
-func readNextTimestamp(scanner *bufio.Scanner) (time.Time, string, error) {
+func readNextTimestamp(scanner *bufio.Scanner, fileIndex int) (time.Time, string, error) {
 	for scanner.Scan() {
-		timestamp, restOfLine, err := parseLogLine(scanner.Text())
+		timestamp, restOfLine, err := parseLogLine(scanner.Text(), fileIndex)
 		if err == nil {
 			return timestamp, restOfLine, nil
 		} else if err == NoTimestampError {
@@ -130,6 +164,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	profilingStart := time.Now()
+
 	var allFiles []string
 	for _, arg := range files {
 		matches, err := filepath.Glob(arg)
@@ -173,7 +209,7 @@ func main() {
 	// Read the first timestamp from each file
 	for i := range scanners {
 		if scanners[i] != nil {
-			timestamps[i], restOfLines[i], fileErrors[i] = readNextTimestamp(scanners[i])
+			timestamps[i], restOfLines[i], fileErrors[i] = readNextTimestamp(scanners[i], i)
 		}
 	}
 
@@ -211,7 +247,7 @@ func main() {
 		if fileErrors[earliestIndex] == nil {
 			var newts time.Time
 			var err error
-			newts, restOfLines[earliestIndex], err = readNextTimestamp(scanners[earliestIndex])
+			newts, restOfLines[earliestIndex], err = readNextTimestamp(scanners[earliestIndex], earliestIndex)
 			if err == nil {
 				timestamps[earliestIndex] = newts
 				fileErrors[earliestIndex] = err
@@ -219,9 +255,16 @@ func main() {
 				// no timestamp in this line, keep the old timestamp
 				fileErrors[earliestIndex] = nil
 			} else {
-				logWarnf("%s: %v\n", filenames[earliestIndex], err)
+				if *verbose {
+					logWarnf("%s: %v\n", filenames[earliestIndex], err)
+				}
 				fileErrors[earliestIndex] = err
 			}
 		}
+	}
+	if *verbose {
+		PrintfStderr("Lines: %d\n", processedLines)
+		PrintfStderr("Cache hits: %d\n", cacheHits)
+		PrintfStderr("Duration %s\n", time.Since(profilingStart))
 	}
 }
