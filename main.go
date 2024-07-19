@@ -18,7 +18,7 @@ var timestampPatterns = []struct {
 	layout string
 }{
 	{regexp.MustCompile(`([A-Za-z]{3} +\d+ \d{2}:\d{2}:\d{2})`), "Jan _2 15:04:05"},
-	{regexp.MustCompile(`\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})\]`), "2006-01-02 15:04:05 -0700"}, // New format
+	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})`), "2006-01-02 15:04:05 -0700"},
 	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})`), "2006-01-02 15:04:05.000"},
 	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})`), "2006-01-02 15:04:05.000"},
 	{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`), "2006-01-02 15:04:05"},

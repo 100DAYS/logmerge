@@ -17,15 +17,22 @@ jobs:
         run: go get .
       - name: Build windows/x86
         run: env GOOS=windows GOARCH=amd64 go build -o logmerge.exe -v ./...
-      - name: Build linux/x86
-        run: env GOOS=linux GOARCH=amd64 go build -o logmerge -v ./...
       - name: Test with Go
         run: go test
+      - name: Build linux/x86
+        run: env GOOS=linux GOARCH=amd64 go build -o logmerge -v ./...
+      - name: Build linux/ARM
+        run: env GOOS=linux GOARCH=arm64 go build -o logmerge_arm -v ./...
       - name: Upload Linux Build
         uses: actions/upload-artifact@v4
         with:
           name: linux
           path: logmerge
+      - name: Upload Linux Build ARM
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux_arm
+          path: logmerge_arm
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
@@ -58,4 +65,4 @@ jobs:
           tag: ${{ steps.tag_version.outputs.new_tag }}
           name: Release ${{ steps.tag_version.outputs.new_tag }}
           body: ${{ steps.tag_version.outputs.changelog }}
-          artifacts: dist/linux/logmerge, dist/windows/logmerge.exe
+          artifacts: dist/linux/logmerge, dist/windows/logmerge.exe, dist/linux_arm/logmerge_arm
