@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+type lineStruct struct {
+	timestamp  time.Time
+	filename   string
+	restOfLine string
+}
+
 var timestampPatterns = []struct {
 	regex  *regexp.Regexp
 	layout string
@@ -128,64 +134,7 @@ func PrintfStderr(format string, args ...interface{}) {
 	_, _ = fmt.Fprintf(os.Stderr, format, args...)
 }
 
-func main() {
-	// Define command-line flags for start and end times
-	startTimeStr := flag.String("start", "", "Start time (format: 2006-01-02T15:04:05)")
-	endTimeStr := flag.String("end", "", "End time (format: 2006-01-02T15:04:05)")
-	fieldSeparator := flag.String("sep", " ", "Field separator")
-	verbose := flag.Bool("v", false, "Verbose output")
-	flag.Parse()
-
-	// Parse the start and end times
-	var startTime, endTime time.Time
-	var err error
-	if *startTimeStr != "" {
-		startTime, err = time.Parse("2006-01-02T15:04:05", *startTimeStr)
-		if err != nil {
-			logErrorf("Error parsing start time: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	if *endTimeStr != "" {
-		endTime, err = time.Parse("2006-01-02T15:04:05", *endTimeStr)
-		if err != nil {
-			logErrorf("Error parsing end time: %v\n", err)
-			os.Exit(1)
-		}
-		endTime = endTime.Add(1 * time.Second)
-	}
-
-	// Get the remaining arguments (file patterns)
-	files := flag.Args()
-	if len(files) == 0 {
-		_, _ = flag.CommandLine.Output().Write([]byte("No files specified\nUsage: logmerge [switches] <file1> <file2> ... <fileN>\nSwitches:\n"))
-		flag.PrintDefaults()
-		//fmt.Println("Usage: logmerge [-v] [-sep FIELD_SEPARATOR] [-start START_TIME] [-end END_TIME] <file1> <file2> ... <fileN>")
-		os.Exit(1)
-	}
-
-	profilingStart := time.Now()
-
-	var allFiles []string
-	for _, arg := range files {
-		matches, err := filepath.Glob(arg)
-		if err != nil {
-			logErrorf("Error expanding glob pattern %s: %s\n", arg, err)
-			continue
-		}
-		if len(matches) == 0 {
-			logErrorf("No files match the pattern: %s\n", arg)
-			continue
-		}
-		allFiles = append(allFiles, matches...)
-	}
-
-	if *verbose {
-		PrintfStderr("Start time: %s\n", startTime.Format("2006-01-02 15:04:05"))
-		PrintfStderr("End time: %s\n", endTime.Format("2006-01-02 15:04:05"))
-		PrintfStderr("Files: %s\n", strings.Join(allFiles, "\n   "))
-	}
-
+func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbose bool, ch chan<- lineStruct) {
 	scanners := make([]*bufio.Scanner, len(allFiles))
 	filenames := make([]string, len(allFiles))
 	fileErrors := make([]error, len(allFiles))
@@ -234,15 +183,13 @@ func main() {
 			break
 		}
 
-		if (startTime.IsZero() || !earliestTime.Before(startTime)) && (endTime.IsZero() || !earliestTime.After(endTime)) {
-			// Print the earliest timestamp with the filename prefix and the rest of the line
-			filenamePrefix := getFilenamePrefix(filenames[earliestIndex])
-			fmt.Printf("%s%s%s%s%s\n", earliestTime.Format("2006-01-02 15:04:05"), *fieldSeparator, filenamePrefix, *fieldSeparator, restOfLines[earliestIndex])
-		}
 		if !endTime.IsZero() && earliestTime.After(endTime) {
 			break
 		}
 
+		if startTime.IsZero() || !earliestTime.Before(startTime) {
+			ch <- lineStruct{earliestTime, filenames[earliestIndex], restOfLines[earliestIndex]}
+		}
 		// Read the next timestamp from the file that had the earliest timestamp
 		if fileErrors[earliestIndex] == nil {
 			var newts time.Time
@@ -250,18 +197,85 @@ func main() {
 			newts, restOfLines[earliestIndex], err = readNextTimestamp(scanners[earliestIndex], earliestIndex)
 			if err == nil {
 				timestamps[earliestIndex] = newts
-				fileErrors[earliestIndex] = err
-			} else if errors.Is(err, NoTimestampError) {
-				// no timestamp in this line, keep the old timestamp
-				fileErrors[earliestIndex] = nil
-			} else {
-				if *verbose {
+				//fileErrors[earliestIndex] = nil
+			} else if !errors.Is(err, NoTimestampError) {
+				if verbose {
 					logWarnf("%s: %v\n", filenames[earliestIndex], err)
 				}
-				fileErrors[earliestIndex] = err
+				fileErrors[earliestIndex] = err // this will end Reading from the file
 			}
+			// in case of NoTimestampError, there is no timestamp in this line, so we keep the old timestamp
 		}
 	}
+	close(ch)
+}
+
+func main() {
+	// Define command-line flags for start and end times
+	startTimeStr := flag.String("start", "", "Start time (format: 2006-01-02T15:04:05)")
+	endTimeStr := flag.String("end", "", "End time (format: 2006-01-02T15:04:05)")
+	fieldSeparator := flag.String("sep", " ", "Field separator")
+	verbose := flag.Bool("v", false, "Verbose output")
+	flag.Parse()
+
+	// Parse the start and end times
+	var startTime, endTime time.Time
+	var err error
+	if *startTimeStr != "" {
+		startTime, err = time.Parse("2006-01-02T15:04:05", *startTimeStr)
+		if err != nil {
+			logErrorf("Error parsing start time: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if *endTimeStr != "" {
+		endTime, err = time.Parse("2006-01-02T15:04:05", *endTimeStr)
+		if err != nil {
+			logErrorf("Error parsing end time: %v\n", err)
+			os.Exit(1)
+		}
+		endTime = endTime.Add(1 * time.Second)
+	}
+
+	// Get the remaining arguments (file patterns)
+	files := flag.Args()
+	if len(files) == 0 {
+		_, _ = flag.CommandLine.Output().Write([]byte("No files specified\nUsage: logmerge [switches] <file1> <file2> ... <fileN>\nSwitches:\n"))
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	profilingStart := time.Now()
+
+	var allFiles []string
+	for _, arg := range files {
+		matches, err := filepath.Glob(arg)
+		if err != nil {
+			logErrorf("Error expanding glob pattern %s: %s\n", arg, err)
+			continue
+		}
+		if len(matches) == 0 {
+			logErrorf("No files match the pattern: %s\n", arg)
+			continue
+		}
+		allFiles = append(allFiles, matches...)
+	}
+
+	if *verbose {
+		PrintfStderr("Start time: %s\n", startTime.Format("2006-01-02 15:04:05"))
+		PrintfStderr("End time: %s\n", endTime.Format("2006-01-02 15:04:05"))
+		PrintfStderr("Files: %s\n", strings.Join(allFiles, "\n   "))
+	}
+
+	ch := make(chan lineStruct)
+
+	go mergeLogs(allFiles, startTime, endTime, *verbose, ch)
+
+	for line := range ch {
+		filenamePrefix := getFilenamePrefix(line.filename)
+		fmt.Printf("%s%s%s%s%s\n", line.timestamp.Format("2006-01-02 15:04:05"), *fieldSeparator, filenamePrefix, *fieldSeparator, line.restOfLine)
+	}
+
 	if *verbose {
 		PrintfStderr("Lines: %d\n", processedLines)
 		PrintfStderr("Cache hits: %d\n", cacheHits)
