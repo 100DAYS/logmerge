@@ -15,7 +15,7 @@ import (
 
 type lineStruct struct {
 	timestamp  time.Time
-	filename   string
+	fileIndex  int
 	restOfLine string
 }
 
@@ -58,7 +58,7 @@ func findBestMatch(line string) (index int, resLoc []int, err error) {
 }
 
 var logFormatIndexes = map[int]int{}
-var currentYear int = time.Now().Year()
+var currentYear = time.Now().Year()
 var processedLines int
 var cacheHits int
 
@@ -136,7 +136,6 @@ func PrintfStderr(format string, args ...interface{}) {
 
 func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbose bool, ch chan<- lineStruct) {
 	scanners := make([]*bufio.Scanner, len(allFiles))
-	filenames := make([]string, len(allFiles))
 	fileErrors := make([]error, len(allFiles))
 
 	// Open all files and create scanners
@@ -147,9 +146,13 @@ func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbos
 			logErrorf("Error opening file %s: %s\n", file, err)
 			continue
 		}
-		defer f.Close()
+		defer func() {
+			err = f.Close()
+			if err != nil {
+				logErrorf("Error closing file %s: %s\n", file, err)
+			}
+		}()
 		scanners[i] = bufio.NewScanner(f)
-		filenames[i] = filepath.Base(file)
 	}
 
 	timestamps := make([]time.Time, len(allFiles))
@@ -188,7 +191,7 @@ func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbos
 		}
 
 		if startTime.IsZero() || !earliestTime.Before(startTime) {
-			ch <- lineStruct{earliestTime, filenames[earliestIndex], restOfLines[earliestIndex]}
+			ch <- lineStruct{earliestTime, earliestIndex, restOfLines[earliestIndex]}
 		}
 		// Read the next timestamp from the file that had the earliest timestamp
 		if fileErrors[earliestIndex] == nil {
@@ -200,7 +203,7 @@ func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbos
 				//fileErrors[earliestIndex] = nil
 			} else if !errors.Is(err, NoTimestampError) {
 				if verbose {
-					logWarnf("%s: %v\n", filenames[earliestIndex], err)
+					logWarnf("%s: %v\n", allFiles[earliestIndex], err)
 				}
 				fileErrors[earliestIndex] = err // this will end Reading from the file
 			}
@@ -261,6 +264,11 @@ func main() {
 		allFiles = append(allFiles, matches...)
 	}
 
+	filenames := make([]string, len(allFiles))
+	for i, file := range allFiles {
+		filenames[i] = getFilenamePrefix(filepath.Base(file))
+	}
+
 	if *verbose {
 		PrintfStderr("Start time: %s\n", startTime.Format("2006-01-02 15:04:05"))
 		PrintfStderr("End time: %s\n", endTime.Format("2006-01-02 15:04:05"))
@@ -272,8 +280,7 @@ func main() {
 	go mergeLogs(allFiles, startTime, endTime, *verbose, ch)
 
 	for line := range ch {
-		filenamePrefix := getFilenamePrefix(line.filename)
-		fmt.Printf("%s%s%s%s%s\n", line.timestamp.Format("2006-01-02 15:04:05"), *fieldSeparator, filenamePrefix, *fieldSeparator, line.restOfLine)
+		fmt.Printf("%s%s%s%s%s\n", line.timestamp.Format("2006-01-02 15:04:05"), *fieldSeparator, filenames[line.fileIndex], *fieldSeparator, line.restOfLine)
 	}
 
 	if *verbose {
