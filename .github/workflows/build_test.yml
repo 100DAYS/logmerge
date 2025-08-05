@@ -49,7 +49,7 @@ jobs:
       contents: write
     steps:
       - name: Download Dist Files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist
       - name: Display structure of downloaded files
