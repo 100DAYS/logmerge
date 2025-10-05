@@ -68,7 +68,9 @@ func extractTimestamp(line string, loc []int, layout string) (timestamp time.Tim
 	if err != nil {
 		return time.Time{}, line, NoTimestampError
 	}
-	if timestamp.Year() == 0 {
+	// Only add current year if we have a month/day but no year (e.g., syslog format "Jan 15 10:30:00")
+	// Don't add year for time-only timestamps (runtime durations like "0:00:08.372570")
+	if timestamp.Year() == 0 && (timestamp.Month() != 1 || timestamp.Day() != 1) {
 		timestamp = timestamp.AddDate(currentYear, 0, 0)
 	}
 	return timestamp, line[:loc[0]] + line[loc[1]:], nil
@@ -117,13 +119,16 @@ func readNextTimestamp(scanner *bufio.Scanner, fileIndex int) (time.Time, string
 	return time.Time{}, "", EndOfFileError
 }
 
-func readFirstTimestamp(scanner *bufio.Scanner, fileIndex int) (time.Time, string, error) {
+func readFirstTimestamp(scanner *bufio.Scanner, fileIndex int, ch chan<- lineStruct) (time.Time, string, error) {
 	for scanner.Scan() {
 		timestamp, restOfLine, err := parseLogLine(scanner.Text(), fileIndex)
 		if err == nil {
 			return timestamp, restOfLine, nil
 		}
-		// Skip lines without timestamps at the beginning of the file
+		// Output lines without timestamps at the beginning of the file with zero timestamp
+		if err == NoTimestampError {
+			ch <- lineStruct{time.Time{}, fileIndex, scanner.Text()}
+		}
 	}
 	return time.Time{}, "", EndOfFileError
 }
@@ -172,10 +177,10 @@ func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbos
 	timestamps := make([]time.Time, len(allFiles))
 	restOfLines := make([]string, len(allFiles))
 
-	// Read the first timestamp from each file (skip initial lines without timestamps)
+	// Read the first timestamp from each file (output initial lines without timestamps)
 	for i := range scanners {
 		if scanners[i] != nil {
-			timestamps[i], restOfLines[i], fileErrors[i] = readFirstTimestamp(scanners[i], i)
+			timestamps[i], restOfLines[i], fileErrors[i] = readFirstTimestamp(scanners[i], i, ch)
 		}
 	}
 
@@ -286,8 +291,18 @@ func ProcessLogs(opts Options, outputWriter *bufio.Writer) (*Stats, error) {
 	go mergeLogs(allFiles, opts.StartTime, opts.EndTime, opts.Verbose, ch)
 
 	for line := range ch {
+		var timeStr string
+		// Check if timestamp is zero value (year=1, month=1, day=1, all time=0) or has no date (year=0)
+		if line.timestamp.IsZero() {
+			timeStr = "[no date info] [no time info]"
+		} else if line.timestamp.Year() == 0 {
+			// No date info but has time info
+			timeStr = fmt.Sprintf("[no date info] %s", line.timestamp.Format("15:04:05.000000"))
+		} else {
+			timeStr = line.timestamp.Format("2006-01-02 15:04:05")
+		}
 		fmt.Fprintf(outputWriter, "%s%s%s%s%s\n",
-			line.timestamp.Format("2006-01-02 15:04:05"),
+			timeStr,
 			opts.FieldSeparator,
 			filenames[line.fileIndex],
 			opts.FieldSeparator,
