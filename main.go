@@ -34,6 +34,7 @@ var timestampPatterns = []struct {
 	{regexp.MustCompile(`(\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2})`), "02/Jan/2006 15:04:05"},
 	{regexp.MustCompile(`(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})`), "02/Jan/2006:15:04:05 -0700"},
 	{regexp.MustCompile(`(\d{2}:\d{2}:\d{2}\.\d{6})`), "15:04:05.000000"},
+	{regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}\.\d{6})`), "15:04:05.000000"},     // single or double-digit hour with microseconds
 	{regexp.MustCompile(`(\d+) (\d{2}:\d{2}:\d{2}\.\d{6})`), "15:04:05.000000"}, // strace format
 }
 
@@ -116,6 +117,17 @@ func readNextTimestamp(scanner *bufio.Scanner, fileIndex int) (time.Time, string
 	return time.Time{}, "", EndOfFileError
 }
 
+func readFirstTimestamp(scanner *bufio.Scanner, fileIndex int) (time.Time, string, error) {
+	for scanner.Scan() {
+		timestamp, restOfLine, err := parseLogLine(scanner.Text(), fileIndex)
+		if err == nil {
+			return timestamp, restOfLine, nil
+		}
+		// Skip lines without timestamps at the beginning of the file
+	}
+	return time.Time{}, "", EndOfFileError
+}
+
 func getFilenamePrefix(filename string) string {
 	// Get the last 20 characters of the filename
 	if len(filename) > 20 {
@@ -158,10 +170,10 @@ func mergeLogs(allFiles []string, startTime time.Time, endTime time.Time, verbos
 	timestamps := make([]time.Time, len(allFiles))
 	restOfLines := make([]string, len(allFiles))
 
-	// Read the first timestamp from each file
+	// Read the first timestamp from each file (skip initial lines without timestamps)
 	for i := range scanners {
 		if scanners[i] != nil {
-			timestamps[i], restOfLines[i], fileErrors[i] = readNextTimestamp(scanners[i], i)
+			timestamps[i], restOfLines[i], fileErrors[i] = readFirstTimestamp(scanners[i], i)
 		}
 	}
 
